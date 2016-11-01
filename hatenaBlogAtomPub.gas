@@ -1,0 +1,73 @@
+var blogURL = 'ブログのURL',
+    username = 'ユーザー名',
+    usermail = 'メールアドレス',
+    rootEndPoint = 'ルートエンドポイント',
+    apiKey = 'APIキー',
+    isDraft = 'yes',
+    subjectToPost = '[blog]',
+    conditionToPost = 'is:unread from:me subject:' + subjectToPost;
+
+var postBody = '<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">' +
+  '<title>{TITLE}</title>' +
+  '<content type="text/plain">{BODY}</content>' +
+  '<app:control><app:draft>' + isDraft + '</app:draft></app:control>' +
+  '</entry>';
+
+String.prototype.repeat = function(times) {
+  return Array(times + 1).join(this);
+};
+String.prototype.markdown = function() {
+  return this.replace(/^(\.+)/gm, function(header) {return '#'.repeat(header.length)});
+};
+String.prototype.getEntryID = function(subject) {
+  return this.match(new RegExp('atom/entry/([\\d]+)[\\s\\S]{50,300}<title>' + subject + '</title>')) ? RegExp.$1 : null;
+}
+
+function postOrUpdate() {
+  // ポメラからの未読メールがない場合は終了
+  var threadsFromPomera = GmailApp.search(conditionToPost, 0, 1);
+  if(threadsFromPomera.length === 0) return;
+
+  // 既存エントリを確認
+  var lastThreadFromPomera = threadsFromPomera[0],
+      lastMailFromPomera   = lastThreadFromPomera.getMessages()[0],
+      subjectWithoutLabel  = lastMailFromPomera.getSubject().replace(subjectToPost, ''),
+      markdownBody         = lastMailFromPomera.getPlainBody().markdown();
+
+  var getResponse = UrlFetchApp.fetch(rootEndPoint + '/entry', {
+    method: 'get',
+    headers: {Authorization: ' Basic ' + Utilities.base64Encode(username + ':' + apiKey)},
+  });
+
+  // 記事一覧が正常に取得できなければ中止
+  if(getResponse.getResponseCode() !== 200) return;
+
+  // 既存記事をメールでバックアップ
+  MailApp.sendEmail({
+    to: usermail,
+    subject: blogURL + 'の記事バックアップ',
+    body: getResponse.getContentText(),
+  });
+
+  // 同じタイトルがあれば更新、なければ新規投稿
+  var entryID        = getResponse.getContentText().getEntryID(subjectWithoutLabel),
+      method         = entryID ? 'put' : 'post',
+      resultMessage  = entryID ? '更新しました' : '投稿しました',
+      postEntryPoint = entryID ? rootEndPoint + '/entry/' + entryID : rootEndPoint + '/entry';
+
+  var postResponse = UrlFetchApp.fetch(postEntryPoint, {
+    method: method,
+    headers: {Authorization: ' Basic ' + Utilities.base64Encode(username + ':' + apiKey)},
+    payload: postBody.replace('{TITLE}', subjectWithoutLabel).replace('{BODY}', markdownBody),
+  });
+
+  // ポメラから送信されたメールを既読にしてアーカイブ
+  lastThreadFromPomera.markRead().moveToArchive();
+
+  // 投稿結果をメール通知
+  MailApp.sendEmail({
+    to: usermail,
+    subject: '「' + subjectWithoutLabel + '」を' + resultMessage,
+    body: postResponse.getContentText(),
+  });
+}

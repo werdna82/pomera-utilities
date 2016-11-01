@@ -1,0 +1,21 @@
+var blogPostMailAddress = '投稿メールアドレス',
+    subjectToPost = '[blog]',
+    conditionToPost = 'is:unread from:me subject:' + subjectToPost,
+    threadsFromPomera = GmailApp.search(conditionToPost, 0, 1);
+
+function postBlogFromPomera() {
+  if(threadsFromPomera.length === 0) return;
+
+  var lastThreadFromPomera = threadsFromPomera[0],
+      lastMailFromPomera = lastThreadFromPomera.getMessages()[0],
+      subjectWithoutLabel = lastMailFromPomera.getSubject().replace(subjectToPost, '');
+
+  MailApp.sendEmail({
+    to: blogPostMailAddress,
+    subject: subjectWithoutLabel,
+    body: lastMailFromPomera.getPlainBody(),
+  });
+
+  lastThreadFromPomera.markRead().moveToArchive();
+  //lastThreadFromPomera.moveToTrash();
+}
