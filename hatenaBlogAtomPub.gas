@@ -1,5 +1,4 @@
-var blogURL = 'ブログのURL',
-    username = 'ユーザー名',
+var username = 'ユーザー名',
     usermail = 'メールアドレス',
     rootEndPoint = 'ルートエンドポイント',
     apiKey = 'APIキー',
@@ -45,7 +44,7 @@ function postOrUpdate() {
   // 既存記事をメールでバックアップ
   MailApp.sendEmail({
     to: usermail,
-    subject: blogURL + 'の記事バックアップ',
+    subject: 'backup:ブログ記事のバックアップ',
     body: getResponse.getContentText(),
   });
 
@@ -67,7 +66,7 @@ function postOrUpdate() {
   // 投稿結果をメール通知
   MailApp.sendEmail({
     to: usermail,
-    subject: '「' + subjectWithoutLabel + '」を' + resultMessage,
+    subject: 'backup:「' + subjectWithoutLabel + '」を' + resultMessage,
     body: postResponse.getContentText(),
   });
 }
