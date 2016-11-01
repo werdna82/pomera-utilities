@@ -1,5 +1,4 @@
 var username = 'ユーザー名',
-    usermail = 'メールアドレス',
     rootEndPoint = 'ルートエンドポイント',
     apiKey = 'APIキー',
     isDraft = 'yes',
@@ -41,13 +40,6 @@ function postOrUpdate() {
   // 記事一覧が正常に取得できなければ中止
   if(getResponse.getResponseCode() !== 200) return;
 
-  // 既存記事をメールでバックアップ
-  MailApp.sendEmail({
-    to: usermail,
-    subject: 'backup:ブログ記事のバックアップ',
-    body: getResponse.getContentText(),
-  });
-
   // 同じタイトルがあれば更新、なければ新規投稿
   var entryID        = getResponse.getContentText().getEntryID(subjectWithoutLabel),
       method         = entryID ? 'put' : 'post',
@@ -62,11 +54,4 @@ function postOrUpdate() {
 
   // ポメラから送信されたメールを既読にしてアーカイブ
   lastThreadFromPomera.markRead().moveToArchive();
-
-  // 投稿結果をメール通知
-  MailApp.sendEmail({
-    to: usermail,
-    subject: 'backup:「' + subjectWithoutLabel + '」を' + resultMessage,
-    body: postResponse.getContentText(),
-  });
 }
