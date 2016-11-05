@@ -1,0 +1,221 @@
+var yahooAppicationID = 'dj0zaiZpPUdFMHFXVnJvZ3VROCZzPWNvbnN1bWVyc2VjcmV0Jng9OTE-'
+
+function Blog(options) {
+  if(options == null) options = {};
+
+  this.options = {
+    username:     options.username,
+    usermail:     options.usermail,
+    postAddress:  options.postAddress,
+    rootEndPoint: options.rootEndPoint,
+    apiKey:       options.apiKey,
+    isDraft:      options.isDraft   || 'yes',
+    label:        options.label     || '[blog]',
+    condition:    options.condition || 'is:unread from:me subject:' + options.label,
+    kouseiTypes:  options.kouseiTypes            || '',
+    ignoreKouseiTypes: options.ignoreKouseiTypes || '',
+  }
+
+  this.threads = undefined;
+  this.thread  = undefined;
+  this.mail    = undefined;
+  this.kouseiResult = undefined;
+}
+
+Blog.prototype.checkMail = function() {
+  this.threads = GmailApp.search(this.options.condition, 0, 1);
+
+  if(this.threads.length === 0) return;
+
+  this.thread = this.threads[0];
+  this.mail   = this.thread.getMessages()[0];
+
+  return this.mail;
+}
+
+Blog.prototype.subjectWithoutLabel = function() {
+  return this.mail.getSubject().replace(this.options.label, '');
+}
+
+Blog.prototype.markdownBody = function() {
+  return this.mail.getPlainBody().replace(/^(\.+)/gm, function(header) {return '#'.repeat(header.length)});
+}
+
+Blog.prototype.authHeader = function() {
+  this.validatePresence({username: true, apiKey: true});
+  return {Authorization: ' Basic ' + Utilities.base64Encode(this.options.username + ':' + this.options.apiKey)};
+}
+
+Blog.prototype.entryPoint = function(entryID) {
+  this.validatePresence({rootEndPoint: true});
+  if(entryID) {
+    return this.options.rootEndPoint + '/entry/' + entryID;
+  }else{
+    return this.options.rootEndPoint + '/entry';
+  }
+}
+
+Blog.prototype.bodyOfPostOrUpdate = function() {
+  return [
+    '<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">',
+    '<title>',
+    this.subjectWithoutLabel(),
+    '</title>',
+    '<content type="text/plain">',
+    this.markdownBody(),
+    '</content>',
+    '<app:control><app:draft>',
+    this.options.isDraft,
+    '</app:draft></app:control>',
+    '</entry>',
+    ].join('');
+}
+
+Blog.prototype.postOrUpdate = function() {
+  this.validatePresence({mail: true, rootEndPoint: true});
+
+  var recentEntries = UrlFetchApp.fetch(this.entryPoint(), {
+    method: 'get',
+    headers: this.authHeader(),
+  });
+
+  var entryID = recentEntries.getContentText().getEntryID(this.subjectWithoutLabel());
+
+  var postResponse = UrlFetchApp.fetch(this.entryPoint(entryID), {
+    method:  entryID ? 'put' : 'post',
+    headers: this.authHeader(),
+    payload: this.bodyOfPostOrUpdate(),
+  });
+
+  return this;
+}
+
+Blog.prototype.post = function() {
+  this.validatePresence({mail: true, postAddress: true});
+
+  MailApp.sendEmail({
+    to:      this.options.postAddress,
+    subject: this.subjectWithoutLabel(),
+    body:    this.mail.getPlainBody(),
+  });
+
+  return this;
+}
+
+Blog.prototype.moveMailToTrash = function() {
+  this.thread && this.thread.moveToTrash();
+  return this;
+}
+
+Blog.prototype.moveMailToArchive = function() {
+  this.thread && this.thread.markRead().moveToArchive();
+  return this;
+}
+
+Blog.prototype.sendMeKouseiResult = function(subjectTemplate) {
+  this.validatePresence({mail: true, kousei: true});
+
+subjectTemplate = subjectTemplate || '[校正](指摘{COUNT}件){SUBJECT}';
+
+  MailApp.sendEmail({
+    to:      this.options.usermail,
+    subject: subjectTemplate
+      .replace('{SUBJECT}', this.subjectWithoutLabel())
+      .replace('{COUNT}',   this.kouseiCount()),
+    body:    this.trimmedkouseiResult(),
+  });
+}
+
+Blog.prototype.fetchKousei = function() {
+  this.validatePresence({mail: true});
+
+  var appID      = this.options.yahooAppicationID || yahooAppicationID;
+  var requestURL = 'http://jlp.yahooapis.jp/KouseiService/V1/kousei' +
+                   '?appid=' + appID +
+                   '&filter_group=' + this.options.kouseiTypes +
+                   '&no_filter='    + this.ignoreKouseiTypeIDs();
+
+  this.kouseiResult = UrlFetchApp.fetch(requestURL, {
+    method:  'post',
+    payload: 'sentence=' + this.mail.getPlainBody()
+  });
+
+  return this;
+}
+
+Blog.prototype.kouseiCount = function() {
+  return (this.kouseiResult.getContentText().match(/<\/ShitekiWord>/g) || []).length
+}
+
+Blog.prototype.trimmedkouseiResult = function() {
+  var _this = this;
+  return this.kouseiResult.getContentText().split('<Result>').splice(1).map(
+    function(line) {return _this.parseKouseiResultLine(line);}
+  ).join('\n\n');
+}
+
+Blog.prototype.parseKouseiResultLine = function(line) {
+  var position     = line.match(/<StartPos>([^<]*)/m)[1],
+      linePosition = this.mail.getPlainBody().slice(0, position).split('\n').length;
+
+  return [
+    '行: '       + linePosition,
+    '指摘箇所: ' + line.match(/<Surface>([^<]*)/m)[1],
+    '修正候補: ' + line.match(/<ShitekiWord>([^<]*)/m)[1],
+    '種類: '     + line.match(/<ShitekiInfo>([^<]*)/m)[1],
+  ].join('\n');
+}
+
+Blog.prototype.ignoreKouseiTypeIDs = function(){
+  if(!this.options.ignoreKouseiTypes) return '';
+
+  var filterTypes = {
+    '誤変換': 1,
+    '誤用': 2,
+    '使用注意': 3,
+    '不快語': 4,
+    '機種依存または拡張文字（EUC表示不可の場合も指摘されます）': 5,
+    '機種依存または拡張文字': 5,
+    '外国地名': 6,
+    '固有名詞': 7,
+    '人名': 8,
+    'ら抜き': 9,
+    '当て字': 10,
+    '表外漢字あり': 11,
+    '用字': 12,
+    '用語言い換え（商標など）': 13,
+    '用語言い換え': 13,
+    '二重否定': 14,
+    '助詞不足の可能性あり': 15,
+    '冗長表現': 16,
+    '略語': 17,
+  };
+
+  var result = this.options.ignoreKouseiTypes.split(',').map(function(key) {
+    return filterTypes[key] || key;
+  }).join(',');
+
+  if(result.match(/^([0-9]|,)*$/)) {
+    return result;
+  }else{
+    throw new Error('ignoreKouseiTypesの形式が正しくありません。');
+  }
+}
+
+Blog.prototype.validatePresence = function(params) {
+  if(params.username     && !this.options.username)     throw new Error('ユーザー名(username)が設定されていません。');
+  if(params.usermail     && !this.options.usermail)     throw new Error('メールアドレス(usermail)が設定されていません。');
+  if(params.postAddress  && !this.options.postAddress)  throw new Error('投稿メールアドレス(postAddress)が設定されていません。');
+  if(params.rootEndPoint && !this.options.rootEndPoint) throw new Error('AtomPubのルートエンドポイント(rootEndPoint)が設定されていません。');
+  if(params.apiKey       && !this.options.apiKey)       throw new Error('AtomPubのAPIキー(apiKey)が設定されていません。');
+  if(params.mail   && !this.mail)         throw new Error('メールがありません。');
+  if(params.kousei && !this.kouseiResult) throw new Error('校正結果がありません。');
+}
+
+String.prototype.repeat = function(times) {
+  return Array(times + 1).join(this);
+};
+
+String.prototype.getEntryID = function(subject) {
+  return this.match(new RegExp('atom/entry/([\\d]+)[\\s\\S]{50,300}<title>' + subject + '</title>')) ? RegExp.$1 : null;
+}
